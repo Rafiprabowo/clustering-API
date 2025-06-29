@@ -75,10 +75,9 @@ def interpret_centroids(centroids):
         cluster["interpretasi"] = [
             "Prioritas Sangat Tinggi",
             "Prioritas Tinggi",
-            "Prioritas Sedang",
             "Prioritas Rendah",
             "Prioritas Sangat Rendah"
-        ][idx] if idx < 5 else f"Prioritas Level {idx+1}"
+        ][idx] if idx < 4 else f"Prioritas Level {idx+1}"
 
     # Kembalikan dalam urutan cluster 0-n
     return sorted(sorted_clusters, key=lambda x: x["cluster"])
@@ -114,7 +113,7 @@ async def upload_excel(file: UploadFile = File(...)):
     features_scaled = scaler.fit_transform(features)
 
     # Clustering
-    kmeans = KMeans(n_clusters=5, random_state=42, n_init='auto', init='k-means++')
+    kmeans = KMeans(n_clusters=4, random_state=42, n_init='auto', init='k-means++')
     labels = kmeans.fit_predict(features_scaled)
     centroids_denorm = scaler.inverse_transform(kmeans.cluster_centers_)
 
@@ -141,7 +140,6 @@ async def upload_excel(file: UploadFile = File(...)):
         ],
         "clustering_run": {
             "jumlah_cluster": 4,
-            "tahun": 2025,
             "nama_file": file.filename,
             "silhouette_score": silhouette_score(features_scaled, labels=labels),
         },
