@@ -3,7 +3,7 @@ from fastapi.responses import ORJSONResponse
 import pandas as pd
 from io import BytesIO
 from sklearn.cluster import KMeans
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.metrics import silhouette_score
 
 app = FastAPI(default_response_class=ORJSONResponse)
@@ -25,16 +25,13 @@ MAP_KEMUNGKINAN = {
 
 def hitung_skor_iku(iku: str):
     items = [item.strip() for item in iku.split(',')]
-    total_bobot = 0
     total_skor = 0
     for item in items:
         if item.startswith("IKU"):
             total_skor += 0.7
-            total_bobot += 1
         elif item.startswith("IKT"):
-            total_skor += 0.3
-            total_bobot += 1
-    return round(total_skor) if total_bobot > 0 else 0.0
+            total_skor += 0.3   
+    return round(total_skor, 1)
 
 def interpret_centroids(centroids):
     import numpy as np
@@ -73,11 +70,12 @@ def interpret_centroids(centroids):
 
     for idx, cluster in enumerate(sorted_clusters):
         cluster["interpretasi"] = [
-            "Prioritas Sangat Tinggi",
+            # "Prioritas Sangat Tinggi",
             "Prioritas Tinggi",
+            "Prioritas Sedang",
             "Prioritas Rendah",
-            "Prioritas Sangat Rendah"
-        ][idx] if idx < 4 else f"Prioritas Level {idx+1}"
+            # "Prioritas Sangat Rendah",
+        ][idx] if idx < 3 else f"Prioritas Level {idx+1}"
 
     # Kembalikan dalam urutan cluster 0-n
     return sorted(sorted_clusters, key=lambda x: x["cluster"])
@@ -100,7 +98,16 @@ async def upload_excel(file: UploadFile = File(...)):
     df_cleaned.reset_index(drop=True, inplace=True)
 
     # Transform
+    def normalize_to_1_5(series):
+        min_val = series.min()
+        max_val = series.max()
+        if max_val == min_val:
+            return pd.Series([3] * len(series), index=series.index)  # Semua sama → beri skor tengah
+        return 1 + 4 * (series - min_val) / (max_val - min_val)
+
     df_cleaned["skor_iku"] = df_cleaned["kode_iku"].apply(hitung_skor_iku)
+    # df_cleaned["skor_iku"] = normalize_to_1_5(df_cleaned['skor_iku'])
+
     df_cleaned["skor_dampak"] = df_cleaned["dampak"].map(MAP_DAMPAK).fillna(0).astype(int)
     df_cleaned["skor_kemungkinan"] = df_cleaned["probaBilitas"].map(MAP_KEMUNGKINAN).fillna(0).astype(int)
     df_cleaned["tingkat_risiko"] = df_cleaned["skor_dampak"] * df_cleaned["skor_kemungkinan"]
@@ -113,7 +120,7 @@ async def upload_excel(file: UploadFile = File(...)):
     features_scaled = scaler.fit_transform(features)
 
     # Clustering
-    kmeans = KMeans(n_clusters=4, random_state=42, n_init='auto', init='k-means++')
+    kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto')
     labels = kmeans.fit_predict(features_scaled)
     centroids_denorm = scaler.inverse_transform(kmeans.cluster_centers_)
 
@@ -127,9 +134,9 @@ async def upload_excel(file: UploadFile = File(...)):
             {
                 "index_cleaned": i,
                 "transform": {
-                    "iku": f"{row['kode_iku']} → skor_iku: {row['skor_iku']}",
-                    "dampak": f"{row['dampak']} → {row['skor_dampak']}",
-                    "probaBilitas": f"{row['probaBilitas']} → {row['skor_kemungkinan']}"
+                    "iku": row['skor_iku'],
+                    "dampak": row['skor_dampak'],
+                    "probaBilitas": row['skor_kemungkinan']
                 },
                 "normalisasi": dict(zip(
                     ["skor_iku", "anggaran", "tingkat_risiko"],
