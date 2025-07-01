@@ -33,9 +33,7 @@ jobs:
             cd "$APP_DIR"
             git pull origin main
 
-            docker stop clustering-api || true
-            docker rm clustering-api || true
-
-            docker build -t clustering-api .
-            docker run -d --name clustering-api -p 8001:8001 clustering-api
+            docker compose down
+            docker compose up -d --build
           EOF
+
