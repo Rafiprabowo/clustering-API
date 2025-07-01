@@ -20,22 +20,21 @@ jobs:
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.HOST }} >> ~/.ssh/known_hosts
 
-      - name: Deploy FastAPI on VPS
+      - name: Deploy to VPS
         run: |
           ssh ${{ secrets.USERNAME }}@${{ secrets.HOST }} << 'EOF'
-            set -e
-            APP_DIR=/var/www/clustering-api
+            cd /var/www/clustering-api || git clone https://github.com/Rafiprabowo/clustering-API.git /var/www/clustering-api
+            cd /var/www/clustering-api
+            git pull origin main
 
-            if [ ! -d "$APP_DIR" ]; then
-              git clone https://github.com/Rafiprabowo/clustering-API.git "$APP_DIR"
-            fi
+            # Hentikan dan hapus container lama jika ada
+            docker stop clustering-api || true
+            docker rm clustering-api || true
 
-            cd "$APP_DIR"
-            git fetch origin main
-            git reset --hard origin/main
-
-            docker compose down
+            # Build dan jalankan ulang dengan docker compose
+            docker compose down || true
             docker compose up -d --build
           EOF
+
 
 
