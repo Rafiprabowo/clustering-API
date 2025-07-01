@@ -1,0 +1,32 @@
+name: FastAPI to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to VPS
+        run: |
+          ssh ${{ secrets.USERNAME }}@${{ secrets.HOST }} << 'EOF'
+            cd /var/www/clustering-api || git clone https://github.com/Rafiprabowo/clustering-API.git /var/www/clustering-api
+            cd /var/www/clustering-api
+            git pull origin main
+            docker stop clustering-api || true && docker rm clustering-api || true
+            docker build -t clustering-api .
+            docker run -d --name clustering-api -p 8001:8001 clustering-api
+          EOF
