@@ -158,7 +158,8 @@ async def upload_excel(file: UploadFile = File(...)):
                 "transform": {
                     "iku": int(skor_iku[i]),
                     "dampak": int(skor_dampak[i]),
-                    "probaBilitas": int(skor_kemungkinan[i])
+                    "probaBilitas": int(skor_kemungkinan[i]),
+                    "tingkat_risiko": int(tingkat_risiko[i])
                 },
                 "normalisasi": dict(zip(
                     ["skor_iku", "anggaran", "tingkat_risiko"],
