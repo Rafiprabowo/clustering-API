@@ -5,9 +5,6 @@ from io import BytesIO
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.metrics import silhouette_score
-import groq
-
-client = groq.Client(api_key="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")
 
 app = FastAPI(default_response_class=ORJSONResponse)
 
