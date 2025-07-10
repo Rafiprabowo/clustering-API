@@ -34,7 +34,13 @@ def hitung_nilai_iku_dan_ikt(isi):
     jumlah_ikt = sum(1 for item in bagian if 'ikt' in item.strip())
     return (jumlah_iku * 0.7) + (jumlah_ikt * 0.3)
 
-
+def klasifikasi_risiko(nilai):
+    if nilai <= 8:
+        return 0  # rendah
+    elif 9 <= nilai <= 12:
+        return 1  # sedang
+    else:
+        return 2  # tinggi
 
 def scale_to_1_5_int(series):
     if series.max() == series.min():
@@ -93,45 +99,48 @@ async def upload_excel(file: UploadFile = File(...)):
 
     df['iku_angka'] = df['iku'].apply(hitung_nilai_iku_dan_ikt)
 
-    # Transform
-    df['nilai_iku'] = scale_to_1_5_int(df['iku_angka'])
+    median = df['iku_angka'].median()
 
-    df['nilRabUsulan_scaled'] = scale_to_1_5_int(df['nilRabUsulan'])
-    df['tingkat_risiko_scaled'] = scale_to_1_5_int(df['tingkat_risiko'])
+
+    # Transform
+    df['nilai_iku'] = (df['iku_angka'] > median).astype(int)
+
+    # df['nilRabUsulan_scaled'] = scale_to_1_5_int(df['nilRabUsulan'])
+    df['tingkat_risiko_scaled'] = df['tingkat_risiko'].apply(klasifikasi_risiko)
 
     # Fitur clustering
-    fitur_clustering = ['nilai_iku', 'nilRabUsulan_scaled', 'tingkat_risiko_scaled']
+    fitur_clustering = ['nilai_iku', 'nilRabUsulan', 'tingkat_risiko_scaled']
     X = df[fitur_clustering]
 
     # Scaling fitur
-    # scaler = MinMaxScaler()
-    # X_scaled = scaler.fit_transform(X)
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(X)
 
     # Tentukan jumlah cluster optimal dengan Elbow
     model = KMeans(random_state=42, n_init='auto')
     visualizer = KElbowVisualizer(model, k=(2, 10), metric='distortion', timings=False)
-    visualizer.fit(X)
+    visualizer.fit(X_scaled)
     k_optimal = visualizer.elbow_value_
     print(f"Jumlah cluster optimal berdasarkan Elbow: {k_optimal}")
 
     # Clustering
     kmeans = KMeans(n_clusters=k_optimal, random_state=42, n_init='auto')
-    df['cluster'] = kmeans.fit_predict(X)
+    df['cluster'] = kmeans.fit_predict(X_scaled)
 
     # Ambil nilai centroid
     centroids = kmeans.cluster_centers_
     centroid_list = [
         {
             "cluster": i,
-            "nilai_iku": round(c[0], 3),
-            "nilai_anggaran": round(c[1], 3),
-            "tingkat_risiko": round(c[2], 3)
+            "nilai_iku": round(c[0]),
+            "nilai_anggaran": round(c[1]),
+            "tingkat_risiko": round(c[2])
         }
         for i, c in enumerate(centroids)
     ]
 
     # Evaluasi Silhouette Score
-    score = silhouette_score(X, df['cluster'])
+    score = silhouette_score(X_scaled, df['cluster'])
     print(f"Silhouette Score (k={k_optimal}): {score:.4f}")
 
     # Ringkasan
