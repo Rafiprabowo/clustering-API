@@ -1,15 +1,22 @@
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import ORJSONResponse
-import pandas as pd
-from io import BytesIO
-from sklearn.cluster import KMeans
+# Simulasi struktur endpoint FastAPI berdasarkan tahapan: cleaning, transform, normalize, clustering
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import List, Dict, Any
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
-from yellowbrick.cluster import KElbowVisualizer
-import numpy as np
+import pandas as pd
 import random
 
-app = FastAPI(default_response_class=ORJSONResponse)
+app = FastAPI()
+
+
+class CleaningRequest(BaseModel):
+    nama_file: str
+    data: List[Dict[str, Any]]  # data tabular dari Laravel
+    
 
 MAP_DAMPAK = {
     "Sangat Sedikit Berpengaruh": 1,
@@ -34,131 +41,143 @@ def hitung_nilai_iku_dan_ikt(isi):
     jumlah_ikt = sum(1 for item in bagian if 'ikt' in item.strip())
     return int((jumlah_iku * 0.7) + (jumlah_ikt * 0.3))
 
-def klasifikasi_risiko(nilai):
-    if nilai <= 8:
-        return 0  # rendah
-    elif 9 <= nilai <= 12:
-        return 1  # sedang
-    else:
-        return 2  # tinggi
+@app.post("/cleaning")
+async def cleaning(request: CleaningRequest):
+    # Ubah list of dict → DataFrame
+    df = pd.DataFrame(request.data)
 
-def scale_to_1_5_int(series):
-    if series.max() == series.min():
-        return pd.Series([3] * len(series), index=series.index)
-    scaled = 1 + 4 * (series - series.min()) / (series.max() - series.min())
-    return scaled.round().astype(int)
+    # Drop duplikat berdasarkan nama_kegiatan
+    df = df.drop_duplicates(subset='nama_kegiatan')
 
+    # Filter nilai_rab_usulan tidak null dan tidak 0
+    df['nilai_rab_usulan'] = pd.to_numeric(df['nilai_rab_usulan'], errors='coerce')
+    df = df[df['nilai_rab_usulan'].notna() & (df['nilai_rab_usulan'] != 0)]
 
-iku_labels = [f"IKU {i}" for i in range(1, 6)]
-# Generate IKU random, bisa lebih dari 1 (dipisah koma)
-def random_iku():
-    jumlah = random.randint(1, 5)  # Banyaknya IKU, misalnya 1 sampai 3 IKU per baris
-    pilihan = random.sample(iku_labels, jumlah)
-    return ', '.join(pilihan)
+    # Bersihkan kolom dampak dan probabilitas
+    for col in ['dampak', 'probabilitas']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            df = df[df[col].notna() & (df[col].str.lower() != 'nan') & (df[col] != '')]
 
-
-@app.post("/uploadFile")
-async def upload_excel(file: UploadFile = File(...)):
-    if not file.filename.endswith((".xlsx", ".xls")):
-        return {"error": "File harus berformat Excel"}
-
-    contents = await file.read()
-    df = pd.read_excel(BytesIO(contents))
-
-    df_awal = df.copy()
-
-    # Cleaning
-
-    # 1. Hapus duplikat berdasarkan nmKegiatan
-    df = df.drop_duplicates(subset='nmKegiatan', keep='first')
-
-    # 2. Hapus baris dengan nilai 0 atau NaN pada kolom nilRabUsulan
-    df = df[df['nilRabUsulan'].notna() & (df['nilRabUsulan'] != 0)]
-
-    # 3. Bersihkan nilai kosong/NaN pada kolom 'dampak' dan 'probaBilitas'
-    for col in ['dampak', 'probaBilitas']:
-        df[col] = df[col].astype(str).str.strip()
-        df = df[(df[col].notna()) & (df[col].str.lower() != 'nan') & (df[col] != '')]
-
-    # 4. Cek kolom yang mengandung kata 'iku' (tidak case sensitive)
+    # Bersihkan kolom yang mengandung kata 'iku' (jika ada)
     iku_col = next((col for col in df.columns if 'iku' in col.lower()), None)
-
-    # 5. Jika kolom 'iku' ditemukan, bersihkan nilainya juga
-    if iku_col is not None:
+    if iku_col:
         df[iku_col] = df[iku_col].astype(str).str.strip()
-        df = df[(df[iku_col].notna()) & (df[iku_col].str.lower() != 'nan') & (df[iku_col] != '')]
+        df = df[df[iku_col].notna() & (df[iku_col].str.lower() != 'nan') & (df[iku_col] != '')]
 
-
-    # 6. Reset index setelah semua filter
     df = df.reset_index(drop=True)
 
+    # Kembalikan dalam format list of dict
+    return JSONResponse(content={
+        "status": "success",
+        "data": df.to_dict(orient="records")
+    })
 
-    # Jika kolom IKU tidak ada (case-insensitive)
-    iku_col = next((col for col in df.columns if 'iku' in col.lower()), None)
+   
 
-    if not iku_col:
-        df['iku'] = [random_iku() for _ in range(len(df))]
-        iku_col = 'iku'  # agar bisa dipakai lagi nanti
+@app.post("/transform")
+async def transform(request: Request):
+    payload = await request.json()
+    df = pd.DataFrame(payload['data'])
 
-    # Transform Numerik
-    # Mapping dampak dan probabilitas
-    df['dampak_numerik'] = df['dampak'].map(MAP_DAMPAK)
-    df['probabilitas_numerik'] = df['probaBilitas'].map(MAP_KEMUNGKINAN)
-    df['tingkat_risiko'] = df['dampak_numerik'] * df['probabilitas_numerik']
-    # Transformasi IKU jika kolom IKU ada
-    if iku_col:
-        df['iku_numerik'] = df[iku_col].apply(hitung_nilai_iku_dan_ikt)
+    # Transformasi nilai IKU/IKT → numerik
+    df['iku'] = df['iku'].apply(hitung_nilai_iku_dan_ikt)
 
-    # Normalisasi
-    cols = ['iku_numerik', 'nilRabUsulan', 'tingkat_risiko']
+    # Mapping dampak dan probabilitas → numerik (timpa kolom asli)
+    df['dampak'] = df['dampak'].map(MAP_DAMPAK).fillna(0)
+    df['probabilitas'] = df['probabilitas'].map(MAP_KEMUNGKINAN).fillna(0)
 
+    return JSONResponse(content={
+        "status": "success",
+        "data": df.to_dict(orient="records")
+    })
+
+   
+
+@app.post("/normalize")
+async def normalize(request: Request):
+    payload = await request.json()
+    df = pd.DataFrame(payload['data'])
+
+    # Hitung tingkat risiko = dampak * probabilitas
+    df['tingkat_risiko'] = df['dampak'] * df['probabilitas']
+
+    # Normalisasi fitur
+    cols = ['iku', 'nilai_rab_usulan', 'tingkat_risiko']
     scaler = MinMaxScaler()
-    df_scaled = pd.DataFrame(scaler.fit_transform(df[cols]), columns=['normal_' + c for c in cols]).round(2)
-    df = pd.concat([df.reset_index(drop=True), df_scaled.reset_index(drop=True)], axis=1)
+    df_scaled = pd.DataFrame(scaler.fit_transform(df[cols]), columns=cols).round(2)
 
-    # 4. Siapkan data untuk clustering
-    fitur_clustering = df_scaled.columns.tolist()
-    X = df[fitur_clustering]
+    # Timpa nilai aslinya
+    df[cols] = df_scaled
 
-    # Tentukan jumlah cluster optimal dengan Elbow
-    # model = KMeans(random_state=42, n_init='auto')
-    # visualizer = KElbowVisualizer(model, k=(2, 10), metric='distortion', timings=False)
-    # visualizer.fit(X)
-    # k_optimal = visualizer.elbow_value_
-    # print(f"Jumlah cluster optimal berdasarkan Elbow: {k_optimal}")
+    return JSONResponse({
+        "status": "success",
+        "data": df.to_dict(orient="records")
+    })
+
+
+@app.post("/clustering")
+async def clustering(request: Request):
+    payload = await request.json()
+    df = pd.DataFrame(payload['data'])
+
+    fitur = ['iku', 'nilai_rab_usulan', 'tingkat_risiko']
+    X = df[fitur]
 
     # Clustering
     kmeans = KMeans(n_clusters=5, random_state=0, n_init=10)
     df['cluster'] = kmeans.fit_predict(X)
 
-    # Ambil nilai centroid
+    print(len(df))
+
+    # Ambil centroid
     centroids = kmeans.cluster_centers_
-    centroid_list = [
-        {
+
+    # Interpretasi berdasarkan skor kustom
+    centroid_list = []
+    for i, c in enumerate(centroids):
+        c_iku = round(c[0], 4)
+        c_anggaran = round(c[1], 4)
+        c_risiko = round(c[2], 4)
+
+        # Hitung skor prioritas: makin kecil, makin tinggi prioritas
+        skor = (c_iku * 0.4) + ((1 - c_anggaran) * 0.3) + ((1 - c_risiko) * 0.3)
+        centroid_list.append({
             "cluster": i,
-            "c_iku": round(c[0], 2),
-            "c_nilRabUsulan": round(c[1], 2),
-            "c_tingkat_risiko": round(c[2], 2)
-        }
-        for i, c in enumerate(centroids)
+            "c_iku": c_iku,
+            "c_anggaran": c_anggaran,
+            "c_tingkat_risiko": c_risiko,
+            "skor_prioritas": round(skor, 4)
+        })
+
+    # Urutkan skor: makin tinggi skor = prioritas makin tinggi
+    sorted_by_score = sorted(centroid_list, key=lambda x: x['skor_prioritas'], reverse=True)
+
+    interpretasi_labels = [
+        'Prioritas Sangat Tinggi',
+        'Prioritas Tinggi',
+        'Prioritas Sedang',
+        'Prioritas Rendah',
+        'Prioritas Sangat Rendah'
     ]
 
-    # Evaluasi Silhouette Score
+    for i, item in enumerate(sorted_by_score):
+        item['interpretasi'] = interpretasi_labels[i]
+        item['tingkat_prioritas'] = i + 1
+
+    # Gabungkan interpretasi ke centroid utama
+    for centroid in centroid_list:
+        match = next((x for x in sorted_by_score if x['cluster'] == centroid['cluster']), None)
+        if match:
+            centroid['interpretasi'] = match['interpretasi']
+            centroid['tingkat_prioritas'] = match['tingkat_prioritas']
+
+    # Hitung silhouette score
     score = silhouette_score(X, df['cluster'])
 
-    # Ringkasan
-    total_data = len(df_awal) 
-    data_bersih = len(df)
-    data_dibuang = len(df_awal) - len(df)
-
-    return {
-        "status": "success",
-        "nama_file": file.filename,
-        "total_data": total_data,
-        "data_bersih": data_bersih,
-        "data_dibuang": data_dibuang,
-        "centroids": centroid_list,
-        "score": score,
-        "kolom": df.columns.to_list(),
+    return JSONResponse({
         "data": df.to_dict(orient='records'),
-    }
+        "centroids": centroid_list,
+        "score": round(score, 4)
+    })
+
