@@ -40,9 +40,9 @@ class DataMentah(BaseModel):
     pengendalian: Optional[str]
     
 @app.post("/cleaning")
-def clean_data(data: List[DataMentah]):
+def clean_data(data: List[dict]):
     # Ubah input jadi DataFrame
-    df = pd.DataFrame([d.dict() for d in data])
+    df = pd.DataFrame([d.dict() if hasattr(d, 'dict') else d for d in data])
 
     required_fields = ['iku', 'nilai_rab_usulan', 'dampak', 'probabilitas']
 
@@ -53,11 +53,13 @@ def clean_data(data: List[DataMentah]):
     for col in required_fields:
         df_cleaned = df_cleaned[df_cleaned[col].astype(str).str.strip() != '']
 
-    # 3. Drop jika nilai_rab_usulan == 0
+    # 3. Drop jika nilai_rab_usulan == 0 (pastikan sebagai numeric dulu)
+    df_cleaned['nilai_rab_usulan'] = pd.to_numeric(df_cleaned['nilai_rab_usulan'], errors='coerce')
     df_cleaned = df_cleaned[df_cleaned['nilai_rab_usulan'] != 0]
 
     # 4. Drop duplikat berdasarkan nama_kegiatan
-    df_cleaned = df_cleaned.drop_duplicates(subset='nama_kegiatan', keep='first')
+    if 'nama_kegiatan' in df_cleaned.columns:
+        df_cleaned = df_cleaned.drop_duplicates(subset='nama_kegiatan', keep='first')
 
     return df_cleaned.to_dict(orient='records')
 
